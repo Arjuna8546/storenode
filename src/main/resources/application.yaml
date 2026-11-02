@@ -8,3 +8,9 @@ spring:
   docker:
     compose:
       lifecycle-management: start-only
+
+storenode:
+  branch:
+    id: 0190f3c0-0000-7000-8000-000000000001
+    code: AIR01
+    zone-id: Asia/Kolkata

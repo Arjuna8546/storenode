@@ -3,11 +3,13 @@ package com.storenode.domain.order;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.util.Objects;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public record OrderNumber(String branchCode, LocalDate businessDate, int sequence) {
 
     private static final Pattern BRANCH_CODE = Pattern.compile("[A-Z0-9]{2,10}");
+    private static final Pattern FORMAT = Pattern.compile("ORD-([A-Z0-9]{2,10})-(\\d{8})-(\\d{4,})");
 
     public OrderNumber {
         Objects.requireNonNull(branchCode, "branchCode");
@@ -27,6 +29,16 @@ public record OrderNumber(String branchCode, LocalDate businessDate, int sequenc
     @Override
     public String toString() {
         return format();
+    }
+
+    public static OrderNumber parse(String text) {
+        Matcher matcher = FORMAT.matcher(text);
+        if (!matcher.matches()) {
+            throw new IllegalArgumentException("Not an order number: " + text);
+        }
+        return new OrderNumber(matcher.group(1),
+                LocalDate.parse(matcher.group(2), DateTimeFormatter.BASIC_ISO_DATE),
+                Integer.parseInt(matcher.group(3)));
     }
 }
 

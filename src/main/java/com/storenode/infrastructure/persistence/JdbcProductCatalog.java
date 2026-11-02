@@ -10,9 +10,9 @@ import org.springframework.stereotype.Repository;
 
 import java.sql.ResultSet;
 import java.sql.SQLException;
-import java.util.Currency;
-import java.util.List;
-import java.util.UUID;
+import java.util.*;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 @Repository
 public class JdbcProductCatalog implements ProductCatalog {
@@ -39,5 +39,20 @@ public class JdbcProductCatalog implements ProductCatalog {
         return new Product(rs.getObject("id", UUID.class), rs.getString("sku"), rs.getString("name"), price,
                 new TaxRate(rs.getBigDecimal("tax_rate")), rs.getBoolean("requires_preparation"));
     }
+
+    @Override
+    public Map<UUID, Product> findByIds(Collection<UUID> productIds) {
+        if (productIds.isEmpty()) {
+            return Map.of();
+        }
+        return jdbc.sql("""
+                    select id, sku, name, unit_price, currency, tax_rate, requires_preparation
+                    from product where id in (:ids)""")
+                .param("ids", productIds)
+                .query((rs, rowNum) -> toProduct(rs))
+                .list().stream()
+                .collect(Collectors.toMap(Product::id, Function.identity()));
+    }
+
 }
 
