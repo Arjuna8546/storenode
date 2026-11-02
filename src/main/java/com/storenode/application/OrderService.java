@@ -12,6 +12,7 @@ import com.storenode.domain.shared.Quantity;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -52,7 +53,8 @@ public class OrderService {
                 takeStock(line);
             }
 
-            Instant now = clock.instant();
+            // Postgres keeps microseconds, so cut the time there; then what we return equals what we store
+            Instant now = clock.instant().truncatedTo(ChronoUnit.MICROS);
             LocalDate businessDate = LocalDate.ofInstant(now, branch.zoneId());
             int sequence = fiscalSequence.next(branch.code(), businessDate);
             OrderNumber number = new OrderNumber(branch.code(), businessDate, sequence);
