@@ -1,0 +1,10 @@
+spring:
+  application:
+    name: store-node
+  datasource:
+    url: jdbc:postgresql://localhost:5460/storenode
+    username: storenode
+    password: storenode
+  docker:
+    compose:
+      lifecycle-management: start-only
