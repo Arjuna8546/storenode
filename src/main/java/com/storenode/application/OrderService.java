@@ -81,19 +81,22 @@ public class OrderService {
                 takeStock(line);
             }
 
-
-            // Postgres keeps microseconds, so cut the time there; then what we return equals what we store
-            Instant now = clock.instant().truncatedTo(ChronoUnit.MICROS);
-            LocalDate businessDate = LocalDate.ofInstant(now, branch.zoneId());
+            // The counter is kept per business day, so the day has to be known before asking for a number.
+            LocalDate businessDate = LocalDate.ofInstant(clock.instant(), branch.zoneId());
             int sequence = fiscalSequence.next(branch.code(), businessDate);
             OrderNumber number = new OrderNumber(branch.code(), businessDate, sequence);
 
-            Order order = draft.place(Ids.newId(), branch.id(), number, command.terminalId(), now);
+            // The time is read only now, while we hold the counter's lock. Numbers are handed out one at a time,
+            // so a later number can never get an earlier time. (Postgres keeps microseconds, so cut the time there;
+            // then what we return equals what we store.)
+            Instant placedAt = clock.instant().truncatedTo(ChronoUnit.MICROS);
+
+            Order order = draft.place(Ids.newId(), branch.id(), number, command.terminalId(), placedAt);
             orders.save(order, command.idempotencyKey());
 
             // Written in this same transaction: either the order and its kitchen event are both saved, or neither is.
             // The kitchen itself is never called from here, so it can be slow or down without touching checkout.
-            OrderPlaced.from(order).ifPresent(event -> outbox.append(event, now));
+            OrderPlaced.from(order).ifPresent(event -> outbox.append(event, placedAt));
             return order;
         });
     }

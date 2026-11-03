@@ -177,6 +177,22 @@ class ConcurrencyIntegrationTest extends IntegrationTest {
     }
 
     @Test
+    void aLaterOrderNeverGetsASmallerNumber() {
+        List<UUID> products = new ArrayList<>();
+        for (int i = 0; i < TERMINALS; i++) {
+            products.add(addProduct("Q" + i, "10.00", 5));
+        }
+        AtomicInteger next = new AtomicInteger();
+
+        allAtOnce(TERMINALS, () -> orderService.placeOrder(command(products.get(next.getAndIncrement()), 1)));
+
+        // read the orders back in the order they were placed: the numbers must go up and up
+        List<String> byTime = jdbc.sql("select order_number from orders order by placed_at, order_number")
+                .query(String.class).list();
+        assertThat(byTime).isSorted();
+    }
+
+    @Test
     void anOrderThatFailsAfterGettingItsNumberDoesNotBurnTheNumber() {
         UUID boom = addProduct("BOOM", "10.00", 5);
         UUID fine = addProduct("FINE", "10.00", 5);
