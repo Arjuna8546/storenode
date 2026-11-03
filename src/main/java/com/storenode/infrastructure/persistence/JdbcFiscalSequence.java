@@ -15,14 +15,21 @@ public class JdbcFiscalSequence implements FiscalSequence {
         this.jdbc = jdbc;
     }
 
-    // Simple on purpose: count today's orders and add one. Phase 7 shows why that is not safe.
+    // One statement: create today's row with 1, or add 1 to it if it exists, and give back the new value.
+    // Postgres locks the row, so a second terminal waits here until the first order commits.
+    // That is what makes the numbers one-after-another; the transaction rolling back is what keeps them gap-free.
     @Override
     public int next(String branchCode, LocalDate businessDate) {
-        long placedToday = jdbc.sql("select count(*) from orders where business_date = :date")
+        return jdbc.sql("""
+                        insert into fiscal_counter (branch_code, business_date, last_number)
+                        values (:branch, :date, 1)
+                        on conflict (branch_code, business_date)
+                        do update set last_number = fiscal_counter.last_number + 1
+                        returning last_number""")
+                .param("branch", branchCode)
                 .param("date", businessDate)
-                .query(Long.class)
+                .query(Integer.class)
                 .single();
-        return (int) placedToday + 1;
     }
 }
 

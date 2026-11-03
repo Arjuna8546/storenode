@@ -24,7 +24,8 @@ public abstract class IntegrationTest {
 
     @BeforeEach
     void emptyTheTables() {
-        jdbc.sql("truncate table order_line, orders, inventory, product").update();
+        jdbc.sql("truncate table order_line, orders, inventory, product, fiscal_counter").update();
+
     }
 
     /** Puts a product and its stock into the database and returns the product id. */

@@ -3,6 +3,7 @@ package com.storenode.integration;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.storenode.application.OrderService;
 import com.storenode.domain.exception.OutOfStockException;
+import com.storenode.domain.order.Order;
 import com.storenode.domain.order.Payment;
 import com.storenode.domain.order.PaymentMethod;
 import com.storenode.domain.shared.Money;
@@ -11,6 +12,7 @@ import com.zaxxer.hikari.HikariDataSource;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.web.client.TestRestTemplate;
+import org.springframework.dao.DataAccessException;
 import org.springframework.http.*;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -25,6 +27,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class ConcurrencyIntegrationTest extends IntegrationTest {
 
@@ -120,6 +123,62 @@ class ConcurrencyIntegrationTest extends IntegrationTest {
             }
         }
         assertThat(stockOf(wrap)).isEqualTo(10);
+    }
+
+    // ---- Scenario B ----
+
+    @Test
+    void fiftyOrdersAtOnceGetFiftyDifferentNumbersWithNoGaps() {
+        // a different product per terminal, so nothing else forces the orders to queue up
+        List<UUID> products = new ArrayList<>();
+        for (int i = 0; i < TERMINALS; i++) {
+            products.add(addProduct("P" + i, "10.00", 5));
+        }
+        AtomicInteger next = new AtomicInteger();
+
+        Result result = allAtOnce(TERMINALS, () -> orderService.placeOrder(command(products.get(next.getAndIncrement()), 1)));
+
+        assertThat(result.failures).isEmpty();
+        assertThat(result.placed).isEqualTo(TERMINALS);
+
+        List<String> numbers = jdbc.sql("select order_number from orders order by order_number")
+                .query(String.class).list();
+        String prefix = numbers.get(0).substring(0, numbers.get(0).lastIndexOf('-') + 1);   // ORD-AIR01-20261103-
+        List<String> expected = new ArrayList<>();
+        for (int i = 1; i <= TERMINALS; i++) {
+            expected.add(prefix + String.format("%04d", i));
+        }
+        assertThat(numbers).containsExactlyElementsOf(expected);
+    }
+
+    @Test
+    void anOrderThatFailsAfterGettingItsNumberDoesNotBurnTheNumber() {
+        UUID boom = addProduct("BOOM", "10.00", 5);
+        UUID fine = addProduct("FINE", "10.00", 5);
+
+        // A trigger makes saving the BOOM order line fail. By then the order already has its number,
+        // so this is a crash "in the middle" of checkout.
+        jdbc.sql("""
+            create function fail_on_boom() returns trigger as $$
+            begin
+                if new.sku = 'BOOM' then
+                    raise exception 'simulated crash while saving';
+                end if;
+                return new;
+            end
+            $$ language plpgsql""").update();
+        jdbc.sql("create trigger fail_on_boom before insert on order_line for each row execute function fail_on_boom()").update();
+        try {
+            assertThatThrownBy(() -> orderService.placeOrder(command(boom, 1))).isInstanceOf(DataAccessException.class);
+        } finally {
+            jdbc.sql("drop trigger fail_on_boom on order_line").update();
+            jdbc.sql("drop function fail_on_boom()").update();
+        }
+
+        Order next = orderService.placeOrder(command(fine, 1));
+
+        assertThat(next.number().format()).endsWith("-0001");   // the failed order left no hole
+        assertThat(stockOf(boom)).isEqualTo(5);
     }
 
 
