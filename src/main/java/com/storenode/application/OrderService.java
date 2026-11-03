@@ -17,7 +17,13 @@ import java.util.*;
 
 public class OrderService {
 
-    public record PlaceOrderCommand(String terminalId, List<Item> items, Payment payment) {
+    public record PlaceOrderCommand(String idempotencyKey, String terminalId, List<Item> items, Payment payment) {
+
+        public PlaceOrderCommand {
+            if (idempotencyKey == null || idempotencyKey.isBlank() || idempotencyKey.length() > 100) {
+                throw new IllegalArgumentException("The idempotency key must be 1 to 100 characters");
+            }
+        }
 
         public record Item(UUID productId, Quantity quantity) {
         }
@@ -43,6 +49,22 @@ public class OrderService {
     }
 
     public Order placeOrder(PlaceOrderCommand command) {
+        // A retry of a sale we already finished: hand back the same order and touch nothing.
+        Optional<Order> alreadyPlaced = orders.findByIdempotencyKey(command.idempotencyKey());
+        if (alreadyPlaced.isPresent()) {
+            return alreadyPlaced.get();
+        }
+
+        try {
+            return placeNewOrder(command);
+        } catch (DuplicateRequestException e) {
+            // Two requests with the same key ran at the same moment and the other one saved first.
+            // Our attempt was rolled back completely (stock, number, everything), so return the winner.
+            return orders.findByIdempotencyKey(command.idempotencyKey()).orElseThrow(() -> e);
+        }
+    }
+
+    private Order placeNewOrder(PlaceOrderCommand command) {
         return transactions.inTransaction(() -> {
             OrderDraft draft = OrderDraft.create(requestedLines(command), command.payment());
 
@@ -63,7 +85,7 @@ public class OrderService {
             OrderNumber number = new OrderNumber(branch.code(), businessDate, sequence);
 
             Order order = draft.place(Ids.newId(), branch.id(), number, command.terminalId(), now);
-            orders.save(order);
+            orders.save(order, command.idempotencyKey());
             return order;
         });
     }

@@ -82,7 +82,7 @@ class OrderServiceTest {
 
     @Test
     void refusesAnUnknownProduct() {
-        OrderService.PlaceOrderCommand command = new PlaceOrderCommand("KIOSK-07",
+        OrderService.PlaceOrderCommand command = new PlaceOrderCommand(UUID.randomUUID().toString(), "KIOSK-07",
                 List.of(new PlaceOrderCommand.Item(Ids.newId(), new Quantity(1))),
                 new Payment(PaymentMethod.CASH, Money.of("500.00", "INR")));
 
@@ -101,6 +101,46 @@ class OrderServiceTest {
     }
 
     @Test
+    void sendingTheSameKeyAgainReturnsTheFirstOrderAndTouchesNothing() {
+        inventory.stock.put(wrap.id(), 10);
+
+        Order first = service.placeOrder(command("sale-1", 3, "500.00"));
+        Order retry = service.placeOrder(command("sale-1", 3, "500.00"));
+
+        assertThat(retry).isEqualTo(first);
+        assertThat(inventory.stock.get(wrap.id())).isEqualTo(7);   // taken once
+        assertThat(sequence.issued).isEqualTo(1);                   // one number
+        assertThat(orders.saved).hasSize(1);
+    }
+
+    @Test
+    void aDifferentKeyIsANewSale() {
+        inventory.stock.put(wrap.id(), 10);
+
+        Order first = service.placeOrder(command("sale-1", 1, "500.00"));
+        Order second = service.placeOrder(command("sale-2", 1, "500.00"));
+
+        assertThat(second.id()).isNotEqualTo(first.id());
+        assertThat(inventory.stock.get(wrap.id())).isEqualTo(8);
+    }
+
+    @Test
+    void ifAnotherRequestWithTheSameKeyWinsTheRaceWeReturnItsOrder() {
+        inventory.stock.put(wrap.id(), 10);
+        orders.anotherRequestWinsTheRace = true;
+
+        Order returned = service.placeOrder(command("sale-1", 1, "500.00"));
+
+        assertThat(returned).isEqualTo(orders.byKey.get("sale-1"));
+    }
+
+    @Test
+    void aKeyMustBeSent() {
+        assertThatThrownBy(() -> command(" ", 1, "500.00")).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> command(null, 1, "500.00")).isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
     void takesStockInProductIdOrderWhateverOrderTheCustomerListedIt() {
         UUID low = UUID.fromString("00000000-0000-7000-8000-000000000001");
         UUID high = UUID.fromString("00000000-0000-7000-8000-000000000002");
@@ -112,7 +152,7 @@ class OrderServiceTest {
         OrderService twoProductService = new OrderService(new DirectTransactions(), twoProducts, inventory, sequence, orders, branch, clock);
 
         // the customer lists the second product first
-        twoProductService.placeOrder(new PlaceOrderCommand("KIOSK-07",
+        twoProductService.placeOrder(new PlaceOrderCommand(UUID.randomUUID().toString(), "KIOSK-07",
                 List.of(new PlaceOrderCommand.Item(second.id(), new Quantity(1)),
                         new PlaceOrderCommand.Item(first.id(), new Quantity(1))),
                 new Payment(PaymentMethod.CASH, Money.of("500.00", "INR"))));
@@ -123,7 +163,11 @@ class OrderServiceTest {
 
 
     private PlaceOrderCommand command(int quantity, String cash) {
-        return new PlaceOrderCommand("KIOSK-07",
+        return command(UUID.randomUUID().toString(), quantity, cash);
+    }
+
+    private PlaceOrderCommand command(String idempotencyKey, int quantity, String cash) {
+        return new PlaceOrderCommand(idempotencyKey, "KIOSK-07",
                 List.of(new PlaceOrderCommand.Item(wrap.id(), new Quantity(quantity))),
                 new Payment(PaymentMethod.CASH, Money.of(cash, "INR")));
     }
@@ -181,10 +225,24 @@ class OrderServiceTest {
 
     private static class FakeOrders implements OrderStore {
         final List<Order> saved = new ArrayList<>();
+        final Map<String, Order> byKey = new HashMap<>();
+        boolean anotherRequestWinsTheRace = false;
 
         @Override
-        public void save(Order order) {
+        public void save(Order order, String idempotencyKey) {
+            if (anotherRequestWinsTheRace) {
+                // pretend a second request with the same key saved its order a moment earlier
+                saved.add(order);
+                byKey.put(idempotencyKey, order);
+                throw new DuplicateRequestException(idempotencyKey);
+            }
             saved.add(order);
+            byKey.put(idempotencyKey, order);
+        }
+
+        @Override
+        public Optional<Order> findByIdempotencyKey(String idempotencyKey) {
+            return Optional.ofNullable(byKey.get(idempotencyKey));
         }
 
         @Override

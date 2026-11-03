@@ -19,12 +19,12 @@ public record PlaceOrderRequest(@NotEmpty @Valid List<LineRequest> lines, @NotNu
     public record PaymentRequest(@NotNull PaymentMethod method, @NotBlank String amount, @NotBlank String currency) {
     }
 
-    public OrderService.PlaceOrderCommand toCommand(String terminalId) {
+    public OrderService.PlaceOrderCommand toCommand(String idempotencyKey, String terminalId) {
         List<OrderService.PlaceOrderCommand.Item> items = lines.stream()
                 .map(line -> new OrderService.PlaceOrderCommand.Item(line.productId(), new Quantity(line.quantity())))
                 .toList();
         Payment domainPayment = new Payment(payment.method(), Money.of(payment.amount(), payment.currency()));
-        return new OrderService.PlaceOrderCommand(terminalId, items, domainPayment);
+        return new OrderService.PlaceOrderCommand(idempotencyKey, terminalId, items, domainPayment);
     }
 }
 

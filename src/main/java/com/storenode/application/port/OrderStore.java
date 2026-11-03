@@ -7,7 +7,14 @@ import java.util.UUID;
 
 public interface OrderStore {
 
-    void save(Order order);
+    /**
+     * Stores the order together with the key the terminal sent for this sale.
+     *
+     * @throws com.storenode.application.DuplicateRequestException if an order with that key already exists
+     */
+    void save(Order order, String idempotencyKey);
+
+    Optional<Order> findByIdempotencyKey(String idempotencyKey);
 
     Optional<Order> findById(UUID id);
 }

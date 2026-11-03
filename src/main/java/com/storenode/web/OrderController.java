@@ -23,8 +23,9 @@ public class OrderController {
 
     @PostMapping
     public ResponseEntity<OrderResponse> place(@Valid @RequestBody PlaceOrderRequest request,
+                                               @RequestHeader(name = "Idempotency-Key") String idempotencyKey,
                                                @RequestHeader(name = "X-Terminal-Id", required = false) String terminalId) {
-        Order order = orders.placeOrder(request.toCommand(terminalId));
+        Order order = orders.placeOrder(request.toCommand(idempotencyKey, terminalId));
         return ResponseEntity.created(URI.create("/api/v1/orders/" + order.id())).body(OrderResponse.from(order));
     }
 

@@ -12,9 +12,11 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ProblemDetail;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.jdbc.CannotGetJdbcConnectionException;
 import org.springframework.jdbc.UncategorizedSQLException;
 import org.springframework.transaction.CannotCreateTransactionException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
+import org.springframework.web.bind.MissingRequestHeaderException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
@@ -50,6 +52,11 @@ public class GlobalExceptionHandler {
         return problem(HttpStatus.BAD_REQUEST, "MALFORMED_REQUEST", "The request body is missing or is not valid JSON");
     }
 
+    @ExceptionHandler(MissingRequestHeaderException.class)
+    ProblemDetail missingHeader(MissingRequestHeaderException e) {
+        return problem(HttpStatus.BAD_REQUEST, "MISSING_HEADER", "The header '" + e.getHeaderName() + "' is required");
+    }
+
     @ExceptionHandler({IllegalArgumentException.class, MethodArgumentTypeMismatchException.class})
     ProblemDetail badValue(Exception e) {
         return problem(HttpStatus.BAD_REQUEST, "INVALID_REQUEST", e.getMessage());
@@ -57,7 +64,8 @@ public class GlobalExceptionHandler {
 
     // The database was too busy for us right now (a lock held too long, a deadlock, no free connection).
     // Nothing was saved, so the terminal can safely send the same order again in a moment.
-    @ExceptionHandler({PessimisticLockingFailureException.class, CannotCreateTransactionException.class})
+    @ExceptionHandler({PessimisticLockingFailureException.class, CannotCreateTransactionException.class,
+            CannotGetJdbcConnectionException.class})
     ResponseEntity<ProblemDetail> tooBusy(Exception e) {
         ProblemDetail problem = problem(HttpStatus.SERVICE_UNAVAILABLE, "TRY_AGAIN",
                 "The store node is busy right now. Please try again.");

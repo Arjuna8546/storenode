@@ -21,6 +21,8 @@ import javax.sql.DataSource;
 import java.sql.Connection;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Queue;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -47,6 +49,29 @@ class ConcurrencyIntegrationTest extends IntegrationTest {
         assertThat(result.outOfStock).isEqualTo(30);
         assertThat(stockOf(wrap)).isZero();
         assertThat(count("orders")).isEqualTo(20);
+    }
+
+    // ---- Scenario C ----
+
+    @Test
+    void theSameOrderSentFiftyTimesAtOnceIsPlacedExactlyOnce() {
+        UUID wrap = addProduct("WRAP", "100.00", 100);
+        Queue<String> orderIds = new ConcurrentLinkedQueue<>();
+
+        // a nervous terminal (or 50 of them) sending one sale with one key, all at the same moment
+        Result result = allAtOnce(TERMINALS, () -> {
+            ResponseEntity<JsonNode> response = post(wrap, 1, "sale-42");
+            assertThat(response.getStatusCode()).isEqualTo(HttpStatus.CREATED);
+            orderIds.add(response.getBody().get("id").asText());
+            return response;
+        });
+
+        assertThat(result.failures).isEmpty();
+        assertThat(orderIds).hasSize(TERMINALS);
+        assertThat(Set.copyOf(orderIds)).hasSize(1);   // everybody was told about the same order
+        assertThat(count("orders")).isEqualTo(1);
+        assertThat(stockOf(wrap)).isEqualTo(99);        // one unit, not fifty
+        assertThat(jdbc.sql("select max(last_number) from fiscal_counter").query(Integer.class).single()).isEqualTo(1);
     }
 
     @Test
@@ -231,13 +256,13 @@ class ConcurrencyIntegrationTest extends IntegrationTest {
     }
 
     private OrderService.PlaceOrderCommand command(UUID product, int quantity) {
-        return new OrderService.PlaceOrderCommand("KIOSK-07",
+        return new OrderService.PlaceOrderCommand(UUID.randomUUID().toString(), "KIOSK-07",
                 List.of(new OrderService.PlaceOrderCommand.Item(product, new Quantity(quantity))),
                 new Payment(PaymentMethod.CASH, Money.of("100000", "INR")));
     }
 
     private OrderService.PlaceOrderCommand command(UUID first, int firstQuantity, UUID second, int secondQuantity) {
-        return new OrderService.PlaceOrderCommand("KIOSK-07",
+        return new OrderService.PlaceOrderCommand(UUID.randomUUID().toString(), "KIOSK-07",
                 List.of(new OrderService.PlaceOrderCommand.Item(first, new Quantity(firstQuantity)),
                         new OrderService.PlaceOrderCommand.Item(second, new Quantity(secondQuantity))),
                 new Payment(PaymentMethod.CASH, Money.of("100000", "INR")));
@@ -252,10 +277,15 @@ class ConcurrencyIntegrationTest extends IntegrationTest {
     }
 
     private ResponseEntity<JsonNode> post(UUID product, int quantity) {
+        return post(product, quantity, UUID.randomUUID().toString());
+    }
+
+    private ResponseEntity<JsonNode> post(UUID product, int quantity, String idempotencyKey) {
         String json = "{\"lines\":[{\"productId\":\"" + product + "\",\"quantity\":" + quantity + "}],"
                 + "\"payment\":{\"method\":\"CASH\",\"amount\":\"1000\",\"currency\":\"INR\"}}";
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_JSON);
+        headers.add("Idempotency-Key", idempotencyKey);
         return http.postForEntity("/api/v1/orders", new HttpEntity<>(json, headers), JsonNode.class);
     }
 

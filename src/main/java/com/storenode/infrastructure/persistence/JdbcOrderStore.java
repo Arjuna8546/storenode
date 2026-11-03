@@ -1,10 +1,12 @@
 package com.storenode.infrastructure.persistence;
 
+import com.storenode.application.DuplicateRequestException;
 import com.storenode.application.port.OrderStore;
 import com.storenode.domain.order.*;
 import com.storenode.domain.shared.Money;
 import com.storenode.domain.shared.Quantity;
 import com.storenode.domain.shared.TaxRate;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
 
@@ -29,15 +31,41 @@ public class JdbcOrderStore implements OrderStore {
     }
 
     @Override
-    public void save(Order order) {
+    public void save(Order order, String idempotencyKey) {
+        try {
+            insertOrder(order, idempotencyKey);
+        } catch (DuplicateKeyException e) {
+            if (isIdempotencyKeyClash(e)) {
+                throw new DuplicateRequestException(idempotencyKey);
+            }
+            throw e;   // any other unique clash (the order number, say) is a real bug and must stay loud
+        }
+    }
+
+    @Override
+    public Optional<Order> findByIdempotencyKey(String idempotencyKey) {
+        return jdbc.sql("select id from orders where idempotency_key = :key")
+                .param("key", idempotencyKey)
+                .query(UUID.class)
+                .optional()
+                .flatMap(this::findById);
+    }
+
+    // Postgres names the broken constraint in its message:
+    // duplicate key value violates unique constraint "uq_orders_idempotency_key"
+    private static boolean isIdempotencyKeyClash(DuplicateKeyException e) {
+        return e.getMessage() != null && e.getMessage().contains("uq_orders_idempotency_key");
+    }
+
+    private void insertOrder(Order order, String idempotencyKey) {
         OffsetDateTime placedAt = OffsetDateTime.ofInstant(order.placedAt(), ZoneOffset.UTC);
         jdbc.sql("""
                         insert into orders (id, branch_id, order_number, business_date, terminal_id, status, currency,
                                             subtotal, tax_total, total, payment_method, amount_tendered, change_due,
-                                            placed_at, created_at, updated_at)
+                                            placed_at, created_at, updated_at, idempotency_key)
                         values (:id, :branchId, :number, :businessDate, :terminalId, :status, :currency,
                                 :subtotal, :taxTotal, :total, :method, :tendered, :changeDue,
-                                :placedAt, :placedAt, :placedAt)""")
+                                :placedAt, :placedAt, :placedAt, :idempotencyKey)""")
                 .param("id", order.id())
                 .param("branchId", order.branchId())
                 .param("number", order.number().format())
@@ -52,6 +80,7 @@ public class JdbcOrderStore implements OrderStore {
                 .param("tendered", order.payment().tendered().amount())
                 .param("changeDue", order.changeDue().amount())
                 .param("placedAt", placedAt)
+                .param("idempotencyKey", idempotencyKey)
                 .update();
 
         for (OrderLine line : order.lines()) {
