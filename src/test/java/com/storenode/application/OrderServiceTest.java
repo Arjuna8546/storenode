@@ -4,9 +4,11 @@ import com.storenode.application.OrderService.PlaceOrderCommand;
 import com.storenode.application.port.FiscalSequence;
 import com.storenode.application.port.InventoryStore;
 import com.storenode.application.port.OrderStore;
+import com.storenode.application.port.OutboxStore;
 import com.storenode.application.port.ProductCatalog;
 import com.storenode.application.port.TransactionRunner;
 import com.storenode.domain.catalog.Product;
+import com.storenode.domain.event.OrderPlaced;
 import com.storenode.domain.exception.OutOfStockException;
 import com.storenode.domain.exception.PaymentRejectedException;
 import com.storenode.domain.exception.ProductNotFoundException;
@@ -40,12 +42,13 @@ class OrderServiceTest {
     private final FakeInventory inventory = new FakeInventory();
     private final FakeOrders orders = new FakeOrders();
     private final FakeSequence sequence = new FakeSequence();
+    private final FakeOutbox outbox = new FakeOutbox();
 
     // 20:00 UTC on 1 November is already 01:30 on 2 November in Kolkata
     private final Clock clock = Clock.fixed(Instant.parse("2026-11-01T20:00:00Z"), ZoneOffset.UTC);
     private final BranchSettings branch = new BranchSettings(Ids.newId(), "AIR01", ZoneId.of("Asia/Kolkata"));
 
-    private final OrderService service = new OrderService(new DirectTransactions(), catalog, inventory, sequence, orders, branch, clock);
+    private final OrderService service = new OrderService(new DirectTransactions(), catalog, inventory, sequence, orders, outbox, branch, clock);
 
     @Test
     void placesTheOrderAndTakesTheStock() {
@@ -141,6 +144,50 @@ class OrderServiceTest {
     }
 
     @Test
+    void anOrderWithFoodToPrepareWritesAKitchenEventAlongsideTheOrder() {
+        inventory.stock.put(wrap.id(), 10);
+
+        Order order = service.placeOrder(command(3, "500.00"));
+
+        assertThat(outbox.appended).hasSize(1);
+        assertThat(outbox.appended.get(0).orderId()).isEqualTo(order.id());
+        assertThat(outbox.appended.get(0).items()).containsExactly(new OrderPlaced.Item("WRAP", "Wrap", 3));
+    }
+
+    @Test
+    void anOrderWithNothingToPrepareWritesNoEvent() {
+        Product bottle = new Product(Ids.newId(), "BOTTLE", "Water", Money.of("40.00", "INR"), TaxRate.of("0.05"), false);
+        OrderService bottleService = new OrderService(new DirectTransactions(), new FakeCatalog(bottle), inventory,
+                sequence, orders, outbox, branch, clock);
+        inventory.stock.put(bottle.id(), 10);
+
+        bottleService.placeOrder(new PlaceOrderCommand("sale-1", "KIOSK-07",
+                List.of(new PlaceOrderCommand.Item(bottle.id(), new Quantity(1))),
+                new Payment(PaymentMethod.CASH, Money.of("500.00", "INR"))));
+
+        assertThat(outbox.appended).isEmpty();
+    }
+
+    @Test
+    void aRetryDoesNotWriteASecondKitchenEvent() {
+        inventory.stock.put(wrap.id(), 10);
+
+        service.placeOrder(command("sale-1", 1, "500.00"));
+        service.placeOrder(command("sale-1", 1, "500.00"));
+
+        assertThat(outbox.appended).hasSize(1);
+    }
+
+    @Test
+    void anOrderThatIsRefusedWritesNoEvent() {
+        inventory.stock.put(wrap.id(), 1);
+
+        assertThatThrownBy(() -> service.placeOrder(command(3, "500.00"))).isInstanceOf(OutOfStockException.class);
+
+        assertThat(outbox.appended).isEmpty();
+    }
+
+    @Test
     void takesStockInProductIdOrderWhateverOrderTheCustomerListedIt() {
         UUID low = UUID.fromString("00000000-0000-7000-8000-000000000001");
         UUID high = UUID.fromString("00000000-0000-7000-8000-000000000002");
@@ -149,7 +196,7 @@ class OrderServiceTest {
         FakeCatalog twoProducts = new FakeCatalog(first, second);
         inventory.stock.put(first.id(), 5);
         inventory.stock.put(second.id(), 5);
-        OrderService twoProductService = new OrderService(new DirectTransactions(), twoProducts, inventory, sequence, orders, branch, clock);
+        OrderService twoProductService = new OrderService(new DirectTransactions(), twoProducts, inventory, sequence, orders, outbox, branch, clock);
 
         // the customer lists the second product first
         twoProductService.placeOrder(new PlaceOrderCommand(UUID.randomUUID().toString(), "KIOSK-07",
@@ -248,6 +295,30 @@ class OrderServiceTest {
         @Override
         public Optional<Order> findById(UUID id) {
             return saved.stream().filter(order -> order.id().equals(id)).findFirst();
+        }
+    }
+
+    private static class FakeOutbox implements OutboxStore {
+        final List<OrderPlaced> appended = new ArrayList<>();
+
+        @Override
+        public void append(OrderPlaced event, Instant now) {
+            appended.add(event);
+        }
+
+        @Override
+        public Optional<PendingEvent> lockNextDue(Instant now) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public void markPublished(UUID eventId, Instant now) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public void markFailed(UUID eventId, int attempts, String error, Instant nextAttemptAt, boolean giveUp) {
+            throw new UnsupportedOperationException();
         }
     }
 

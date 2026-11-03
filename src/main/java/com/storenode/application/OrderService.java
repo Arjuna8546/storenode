@@ -4,6 +4,7 @@ import com.storenode.application.port.*;
 import com.storenode.domain.catalog.Product;
 import com.storenode.domain.exception.OrderNotFoundException;
 import com.storenode.domain.exception.OutOfStockException;
+import com.storenode.domain.event.OrderPlaced;
 import com.storenode.domain.exception.ProductNotFoundException;
 import com.storenode.domain.order.*;
 import com.storenode.domain.shared.Ids;
@@ -34,16 +35,19 @@ public class OrderService {
     private final InventoryStore inventory;
     private final FiscalSequence fiscalSequence;
     private final OrderStore orders;
+    private final OutboxStore outbox;
     private final BranchSettings branch;
     private final Clock clock;
 
     public OrderService(TransactionRunner transactions, ProductCatalog catalog, InventoryStore inventory,
-                        FiscalSequence fiscalSequence, OrderStore orders, BranchSettings branch, Clock clock) {
+                        FiscalSequence fiscalSequence, OrderStore orders, OutboxStore outbox, BranchSettings branch,
+                        Clock clock) {
         this.transactions = transactions;
         this.catalog = catalog;
         this.inventory = inventory;
         this.fiscalSequence = fiscalSequence;
         this.orders = orders;
+        this.outbox = outbox;
         this.branch = branch;
         this.clock = clock;
     }
@@ -86,6 +90,10 @@ public class OrderService {
 
             Order order = draft.place(Ids.newId(), branch.id(), number, command.terminalId(), now);
             orders.save(order, command.idempotencyKey());
+
+            // Written in this same transaction: either the order and its kitchen event are both saved, or neither is.
+            // The kitchen itself is never called from here, so it can be slow or down without touching checkout.
+            OrderPlaced.from(order).ifPresent(event -> outbox.append(event, now));
             return order;
         });
     }

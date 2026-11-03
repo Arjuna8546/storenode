@@ -1,0 +1,4 @@
+storenode:
+  outbox:
+    enabled: false      # tests call the dispatcher themselves, so they decide when it runs
+    max-attempts: 3

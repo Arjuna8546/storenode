@@ -5,6 +5,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.jdbc.core.simple.JdbcClient;
+import org.springframework.test.context.ActiveProfiles;
 
 import java.util.UUID;
 
@@ -14,6 +15,7 @@ import java.util.UUID;
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @Import(TestcontainersConfig.class)
+@ActiveProfiles("test")
 public abstract class IntegrationTest {
 
     // same id as storenode.branch.id in application.yaml
@@ -24,21 +26,27 @@ public abstract class IntegrationTest {
 
     @BeforeEach
     void emptyTheTables() {
-        jdbc.sql("truncate table order_line, orders, inventory, product, fiscal_counter").update();
+        jdbc.sql("truncate table kitchen_ticket, outbox_event, order_line, orders, inventory, product, fiscal_counter").update();
 
     }
 
     /** Puts a product and its stock into the database and returns the product id. */
     protected UUID addProduct(String sku, String price, int stock) {
+        return addProduct(sku, price, stock, false);
+    }
+
+    /** Same, for a product the kitchen has to prepare (a meal) when requiresPreparation is true. */
+    protected UUID addProduct(String sku, String price, int stock, boolean requiresPreparation) {
         UUID id = UUID.randomUUID();
         jdbc.sql("""
                         insert into product (id, branch_id, sku, name, unit_price, currency, tax_rate,
                                              requires_preparation, created_at, updated_at)
-                        values (:id, :branch, :sku, :sku, :price::numeric, 'INR', 0.05, false, now(), now())""")
+                        values (:id, :branch, :sku, :sku, :price::numeric, 'INR', 0.05, :prep, now(), now())""")
                 .param("id", id)
                 .param("branch", BRANCH_ID)
                 .param("sku", sku)
                 .param("price", price)
+                .param("prep", requiresPreparation)
                 .update();
         jdbc.sql("insert into inventory (product_id, branch_id, quantity, updated_at) values (:id, :branch, :stock, now())")
                 .param("id", id)
