@@ -1,0 +1,146 @@
+### Requests for the IntelliJ HTTP client. Start the app first (dev profile, see README).
+### Run each block with the green arrow next to it.
+
+@host = http://localhost:8080
+
+# demo product ids (loaded by the dev profile)
+@mealBox = 0190f3c0-0000-7000-8000-000000000101
+@wrap = 0190f3c0-0000-7000-8000-000000000102
+@latte = 0190f3c0-0000-7000-8000-000000000103
+@water = 0190f3c0-0000-7000-8000-000000000104
+
+
+### 1. Products and how many are in stock
+GET {{host}}/api/v1/products
+
+
+### 2. Place an order. {{$uuid}} makes a new Idempotency-Key every time, so each send is a new sale.
+###    The id of the order is remembered for request 4.
+POST {{host}}/api/v1/orders
+Content-Type: application/json
+X-Terminal-Id: KIOSK-07
+Idempotency-Key: {{$uuid}}
+
+{
+  "lines": [ { "productId": "{{wrap}}", "quantity": 2 } ],
+  "payment": { "method": "CASH", "amount": "500", "currency": "INR" }
+}
+
+> {% client.global.set("orderId", response.body.id); %}
+
+
+### 3. A retry: the SAME key sent twice. Run both; you get the same order and number, and the stock goes down once.
+POST {{host}}/api/v1/orders
+Content-Type: application/json
+X-Terminal-Id: KIOSK-07
+Idempotency-Key: sale-demo-001
+
+{
+  "lines": [ { "productId": "{{latte}}", "quantity": 1 } ],
+  "payment": { "method": "CASH", "amount": "500", "currency": "INR" }
+}
+
+###
+POST {{host}}/api/v1/orders
+Content-Type: application/json
+X-Terminal-Id: KIOSK-07
+Idempotency-Key: sale-demo-001
+
+{
+  "lines": [ { "productId": "{{latte}}", "quantity": 1 } ],
+  "payment": { "method": "CASH", "amount": "500", "currency": "INR" }
+}
+
+
+### 4. Read the order from request 2 back
+GET {{host}}/api/v1/orders/{{orderId}}
+
+
+### 5. What the kitchen screen sees (orders with food to prepare appear within about a second)
+GET {{host}}/api/v1/kitchen/tickets
+
+
+### 6. A card payment must be exactly the total. Wrap x2 = 396.90
+POST {{host}}/api/v1/orders
+Content-Type: application/json
+Idempotency-Key: {{$uuid}}
+
+{
+  "lines": [ { "productId": "{{wrap}}", "quantity": 2 } ],
+  "payment": { "method": "CARD", "amount": "396.90", "currency": "INR" }
+}
+
+
+### ---------- things that should fail, to see the error bodies ----------
+
+### 7. Not enough stock: 409 OUT_OF_STOCK (the meal box has only 10)
+POST {{host}}/api/v1/orders
+Content-Type: application/json
+Idempotency-Key: {{$uuid}}
+
+{
+  "lines": [ { "productId": "{{mealBox}}", "quantity": 11 } ],
+  "payment": { "method": "CASH", "amount": "5000", "currency": "INR" }
+}
+
+
+### 8. Not enough cash: 422 PAYMENT_REJECTED
+POST {{host}}/api/v1/orders
+Content-Type: application/json
+Idempotency-Key: {{$uuid}}
+
+{
+  "lines": [ { "productId": "{{wrap}}", "quantity": 2 } ],
+  "payment": { "method": "CASH", "amount": "10", "currency": "INR" }
+}
+
+
+### 9. Paying in another currency: 422 CURRENCY_MISMATCH
+POST {{host}}/api/v1/orders
+Content-Type: application/json
+Idempotency-Key: {{$uuid}}
+
+{
+  "lines": [ { "productId": "{{wrap}}", "quantity": 1 } ],
+  "payment": { "method": "CASH", "amount": "500", "currency": "USD" }
+}
+
+
+### 10. Unknown product: 404 PRODUCT_NOT_FOUND
+POST {{host}}/api/v1/orders
+Content-Type: application/json
+Idempotency-Key: {{$uuid}}
+
+{
+  "lines": [ { "productId": "00000000-0000-7000-8000-000000000999", "quantity": 1 } ],
+  "payment": { "method": "CASH", "amount": "500", "currency": "INR" }
+}
+
+
+### 11. Quantity out of range: 400 VALIDATION_FAILED
+POST {{host}}/api/v1/orders
+Content-Type: application/json
+Idempotency-Key: {{$uuid}}
+
+{
+  "lines": [ { "productId": "{{wrap}}", "quantity": 9999 } ],
+  "payment": { "method": "CASH", "amount": "500", "currency": "INR" }
+}
+
+
+### 12. No Idempotency-Key header: 400 MISSING_HEADER
+POST {{host}}/api/v1/orders
+Content-Type: application/json
+
+{
+  "lines": [ { "productId": "{{wrap}}", "quantity": 1 } ],
+  "payment": { "method": "CASH", "amount": "500", "currency": "INR" }
+}
+
+
+### 13. Not JSON at all: 400 MALFORMED_REQUEST
+POST {{host}}/api/v1/orders
+Content-Type: application/json
+Idempotency-Key: {{$uuid}}
+
+this is not json
