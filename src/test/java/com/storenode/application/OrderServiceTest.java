@@ -100,6 +100,28 @@ class OrderServiceTest {
         assertThat(orders.saved).isEmpty();
     }
 
+    @Test
+    void takesStockInProductIdOrderWhateverOrderTheCustomerListedIt() {
+        UUID low = UUID.fromString("00000000-0000-7000-8000-000000000001");
+        UUID high = UUID.fromString("00000000-0000-7000-8000-000000000002");
+        Product first = new Product(low, "AAA", "A", Money.of("10.00", "INR"), TaxRate.of("0.05"), false);
+        Product second = new Product(high, "BBB", "B", Money.of("10.00", "INR"), TaxRate.of("0.05"), false);
+        FakeCatalog twoProducts = new FakeCatalog(first, second);
+        inventory.stock.put(first.id(), 5);
+        inventory.stock.put(second.id(), 5);
+        OrderService twoProductService = new OrderService(new DirectTransactions(), twoProducts, inventory, sequence, orders, branch, clock);
+
+        // the customer lists the second product first
+        twoProductService.placeOrder(new PlaceOrderCommand("KIOSK-07",
+                List.of(new PlaceOrderCommand.Item(second.id(), new Quantity(1)),
+                        new PlaceOrderCommand.Item(first.id(), new Quantity(1))),
+                new Payment(PaymentMethod.CASH, Money.of("500.00", "INR"))));
+
+        assertThat(inventory.takenInOrder).containsExactly(low, high);
+    }
+
+
+
     private PlaceOrderCommand command(int quantity, String cash) {
         return new PlaceOrderCommand("KIOSK-07",
                 List.of(new PlaceOrderCommand.Item(wrap.id(), new Quantity(quantity))),
@@ -143,15 +165,17 @@ class OrderServiceTest {
 
     private static class FakeInventory implements InventoryStore {
         final Map<UUID, Integer> stock = new HashMap<>();
+        final List<UUID> takenInOrder = new ArrayList<>();
 
         @Override
-        public int available(UUID productId) {
-            return stock.getOrDefault(productId, 0);
-        }
-
-        @Override
-        public void setQuantity(UUID productId, int quantity) {
-            stock.put(productId, quantity);
+        public boolean tryTake(UUID productId, int quantity) {
+            int available = stock.getOrDefault(productId, 0);
+            if (available < quantity) {
+                return false;
+            }
+            stock.put(productId, available - quantity);
+            takenInOrder.add(productId);
+            return true;
         }
     }
 

@@ -16,20 +16,15 @@ public class JdbcInventoryStore implements InventoryStore {
     }
 
     @Override
-    public int available(UUID productId) {
-        return jdbc.sql("select quantity from inventory where product_id = :id")
-                .param("id", productId)
-                .query(Integer.class)
-                .optional()
-                .orElse(0);
-    }
-
-    @Override
-    public void setQuantity(UUID productId, int quantity) {
-        jdbc.sql("update inventory set quantity = :quantity, version = version + 1, updated_at = now() where product_id = :id")
-                .param("quantity", quantity)
+    public boolean tryTake(UUID productId, int quantity) {
+        int rows = jdbc.sql("""
+                        update inventory
+                        set quantity = quantity - :n, version = version + 1, updated_at = now()
+                        where product_id = :id and quantity >= :n""")
+                .param("n", quantity)
                 .param("id", productId)
                 .update();
+        return rows == 1;
     }
 }
 

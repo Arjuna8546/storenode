@@ -13,10 +13,7 @@ import java.time.Clock;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.temporal.ChronoUnit;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Map;
-import java.util.UUID;
+import java.util.*;
 
 public class OrderService {
 
@@ -49,9 +46,15 @@ public class OrderService {
         return transactions.inTransaction(() -> {
             OrderDraft draft = OrderDraft.create(requestedLines(command), command.payment());
 
-            for (OrderLine line : draft.lines()) {
+            // Always lock the stock rows in the same order (by product id), whatever order the customer
+            // listed them in. Two orders can then never wait for each other: no deadlock.
+            List<OrderLine> inLockOrder = draft.lines().stream()
+                    .sorted(Comparator.comparing(OrderLine::productId))
+                    .toList();
+            for (OrderLine line : inLockOrder) {
                 takeStock(line);
             }
+
 
             // Postgres keeps microseconds, so cut the time there; then what we return equals what we store
             Instant now = clock.instant().truncatedTo(ChronoUnit.MICROS);
@@ -84,15 +87,12 @@ public class OrderService {
         return lines;
     }
 
-    // Simple on purpose: read the stock, check it here, write the new number back.
-    // Phase 6 shows why this is not safe when many terminals do it at once.
+    // The shelf check and the change are one database step (see InventoryStore.tryTake).
     private void takeStock(OrderLine line) {
-        int available = inventory.available(line.productId());
         int wanted = line.quantity().value();
-        if (available < wanted) {
+        if (!inventory.tryTake(line.productId(), wanted)) {
             throw new OutOfStockException(line.productId(), line.sku(), wanted);
         }
-        inventory.setQuantity(line.productId(), available - wanted);
     }
 }
 

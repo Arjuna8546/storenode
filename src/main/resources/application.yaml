@@ -5,6 +5,13 @@ spring:
     url: jdbc:postgresql://localhost:5460/storenode
     username: storenode
     password: storenode
+    hikari:
+      maximum-pool-size: 20
+      connection-timeout: 3000
+      connection-init-sql: SET lock_timeout = '2s'
+  threads:
+    virtual:
+      enabled: true
   docker:
     compose:
       lifecycle-management: start-only
